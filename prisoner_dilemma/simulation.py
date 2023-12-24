@@ -14,11 +14,21 @@ import strategies as strat
 
 
 class Simulation:
+    """
+    Runs a game between two bots.
+    """
     
-    def __init__(self, bot0, bot1, nturns=100):
-        self.bots = [bot0, bot1]
+    
+    def __init__(self, bot0, bot1, nturns=100, commentary=False):
+        self._commentary = commentary
+        
+        self.bots = [bot0(commentary=self._commentary),
+                     bot1(commentary=self._commentary)]
         self.points = np.array([0,0])
+        
         self.nturns = nturns 
+        
+        
         
         if self.nturns <10 or self.nturns>599:
             raise ValueError("Set nturns in the range [50, 599]")
@@ -31,6 +41,7 @@ class Simulation:
         self.history = np.nan*np.ones([600, 2])
         
         self._executed = False
+
         
         
     def _enforce_order(self):
@@ -38,11 +49,14 @@ class Simulation:
             raise ValueError("Run game first!")
     
 
-    def play(self):
+    def run(self):
         """
         1 -> cooperate
         0 -> defect
         """
+        
+        if self._commentary:
+            print(f"{self.bots[0].__class__.__name__} vs. {self.bots[1].__class__.__name__}")
         
         for turn in range(self.nturns):
             
@@ -53,7 +67,8 @@ class Simulation:
             
             choice_1 = self.bots[1].choose(np.flip(_history, axis=1))
             
-            #print(turn, choice_0, choice_1)
+            if self._commentary:
+                print(f"{turn}: ({choice_0}, {choice_1})")
             
             if (choice_0 == 1) and (choice_1 == 1):
                 self.points[0] += 3
@@ -75,43 +90,70 @@ class Simulation:
         
         self._executed = True
         
+        
+    @property
+    def winner_index(self):
+        self._enforce_order()
+        
+        
+        if self.points[0]==self.points[1]:
+            return None
+        else:
+            return np.argmax(self.points)
+        
     @property
     def winner(self):
-        self._enforce_order()
-        return np.argmax(self.points)
+        index = self.winner_index
+        
+        if index is None:
+            return None
+        else:
+            return self.bots[index]
             
   
             
 class SimulationSeries:
+    """
+    Runs a series of games with the same parameters between two bots.
+    """
     
-    def __init__(self, bot1, bot2, nsamples=10, nturns=100):
-        self.bot1 = bot1
-        self.bot2 = bot2
+    def __init__(self, bot1, bot2, nsamples=10, nturns=100, commentary=False):
+        self.bots = [bot1, bot2]
         self.nsamples = nsamples
         self.nturns = nturns
         
         self.points = np.array([0,0])
         
-        self.record = np.array([0,0])
+        # [bot1, bot2, tie]
+        self.record = np.array([0,0,0])
         
         self.history = np.nan*np.zeros([self.nsamples, self.nturns, 2])
         
         self._executed = False
+        self._commentary = commentary
         
         
     def run(self):
         
         for s in range(self.nsamples):
             
-            sim = Simulation(self.bot1, self.bot2, nturns=self.nturns)
-            sim.play()
+            sim = Simulation(*self.bots, nturns=self.nturns,
+                             commentary=self._commentary)
+            sim.run()
             self.points += sim.points
             
             # Record the history 
             self.history[s, :, :] = sim.history
             
             # Increment the win tracker
-            self.record[sim.winner] += 1
+            if sim.winner_index is None:
+                self.record[-1] += 1
+            else:
+                self.record[sim.winner_index] += 1
+                
+                
+        if np.sum(self.record) != self.nsamples:
+            raise ValueError("Record does not match number of samples")
             
         self._executed = True
         
@@ -129,17 +171,34 @@ class SimulationSeries:
         self._enforce_order()
         return np.mean(self.history, axis=(0,1))
     
+    
+    @property
+    def winner_index(self):
+        self._enforce_order()
+        
+        if self.points[0]==self.points[1]:
+            return None
+        else:
+            return np.argmax(self.points)
+            
+    
     @property
     def winner(self):
-        self._enforce_order()
-        return np.argmax(self.points)
-            
+        index = self.winner_index
+        
+        if index is None:
+            return None
+        else:
+            return self.bots[index]
+
+        
+    
             
             
      
             
 class Tournament:
-    def __init__(self, *bots, nsamples=10, nturns=200):
+    def __init__(self, *bots, nsamples=100, nturns=200, commentary=False):
         self.bots = np.array(bots)
         self.nsamples = nsamples
         self.nturns = nturns 
@@ -148,6 +207,7 @@ class Tournament:
         self.record = np.zeros(len(self.bots))
         
         self._executed = False
+        self._commentary=commentary
         
         
     def _enforce_order(self):
@@ -160,8 +220,18 @@ class Tournament:
         for i, bot1 in enumerate(self.bots):
             for j, bot2 in enumerate(self.bots):
                 
-                series = SimulationSeries(bot1(), bot2())
+                series = SimulationSeries(bot1, bot2,
+                                          nsamples=self.nsamples,
+                                          nturns=self.nturns,
+                                          commentary=self._commentary)
                 series.run()
+                
+                if series.winner is None:
+                    winner = 'Tie!'
+                else:
+                    winner = series.winner.__name__
+                
+                print(f"{bot1.__name__} vs. {bot2.__name__} : {series.record}) : Winner = {winner}")
                 
                 self.points[i] += series.points[0]
                 self.points[j] += series.points[1]
@@ -178,12 +248,18 @@ class Tournament:
         
         isort = np.flip(np.argsort(self.points))
 
+        # Calculate the average points per turn 
+        # Each bot plays N+1 games, since it plays itself once
+        points_per_turn = self.points/ self.nsamples / self.nturns / (self.bots.size + 1)  
         
-        points_sorted = self.points[isort]
+        points_per_turn_sorted = points_per_turn[isort] 
+        
         bots_sorted = self.bots[isort]
         
+        
+        print("**** SCORE BOARD ****")
         for i in range(self.bots.size):
-            print(f"{bots_sorted[i].__name__}: {points_sorted[i]}")
+            print(f"{bots_sorted[i].__name__}: {points_per_turn_sorted[i]:.2f}")
             
             
 
@@ -192,21 +268,16 @@ class Tournament:
                 
                 
 if __name__ == '__main__':
-    bots = [strat.RandomChoice, strat.TitForTat, strat.Gullible, strat.HoldsGrudge, strat.Joss]
+   
+    bots = [strat.RandomChoice, strat.TitForTat, strat.HoldsGrudge, strat.Joss]
     
-    t = Tournament(*bots, nsamples=50, nturns=200)
+    t = Tournament(*bots, nsamples=100, nturns=200)
     t.run()
     
     t.score_report()
+ 
     
     
-    """
-    sim = Simulation(strat.RandomChoice(), strat.TitForTat())
-    sim.play()
-    """
-    
-    
-
     """
     series = SimulationSeries(strat.RandomChoice(), strat.TitForTat())
     series.run()
@@ -214,5 +285,12 @@ if __name__ == '__main__':
     print(series.avg_guesses)
     print(series.avg_points)
     """
+    
+    
+    """
+    sim = Simulation(strat.Joss(), strat.TitForTat(), nturns=20, commentary=True)
+    sim.run()
+    """
+    
    
     

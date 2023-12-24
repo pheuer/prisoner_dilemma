@@ -11,8 +11,8 @@ __all__ = [
 
 class Strategy:
     
-    def __init__(self):
-        pass
+    def __init__(self, commentary=False):
+        self._commentary = commentary
     
     
     def choose(self, history):
@@ -40,9 +40,9 @@ class HoldsGrudge(Strategy):
     
     def choose(self, history):
         
-        op_defections = np.where(history[:, 1]==0)
+        op_defections = np.where(history[:, 1]==0)[0]
         
-        if len(op_defections) == 0:
+        if op_defections.size == 0:
             return 1
         else:
             return 0
@@ -79,6 +79,9 @@ class Joss(Strategy):
         other_player_last_move = history[-1, 1]
         
         rint = np.random.random()
+        
+        if rint <= 0.1 and other_player_last_move == 1 and self._commentary:
+            print("Joss defects unprovoked!")
         
         if other_player_last_move == 1 and rint>0.1:
             return 1
